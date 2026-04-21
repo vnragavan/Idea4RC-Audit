@@ -396,24 +396,28 @@ The summary has seven sections. The bits worth internalizing:
   | `missing` | `records − staging` — rows the audit API saw that aren't in staging. |
   | `status`  | One of `clean` / `explained` / `SILENT_LOSS` / `DUPLICATES` / `no_table` (see below). |
 
-  **Reading the `status` column:**
+  **Reading the `status` column (derivation):**
 
-  - **`clean`** — every instance the audit API saw landed in staging.
-    The normal healthy case.
-  - **`explained`** — rows are missing but the missing count is `≤ errored`,
-    i.e. every missing row has a corresponding error on file. This is
-    the expected shape for resources with validation failures (the
-    errors blocked staging, and the report knows about them).
-  - **`SILENT_LOSS`** — **more rows are missing than had errors**. The
-    pipeline dropped rows without recording an error. Investigate
-    `etl-records-by-resource.txt`, `etl-errors-by-resource-instances.txt`,
-    and the staging table. This flips the overall verdict to DEGRADED.
-  - **`DUPLICATES`** — more rows in staging than the audit API saw
-    (`missing < 0`). Almost always means staging wasn't truncated
-    before the upload and carries over from a previous run.
-  - **`no_table`** — no staging table matched the resource name. Add a
-    `RESOURCE_TO_TABLE_OVERRIDE` entry, or confirm the resource
-    doesn't have a dedicated staging table.
+  | Status | Rule | Meaning |
+  |---|---|---|
+  | `clean`       | `missing == 0`               | Every instance the audit API saw landed in staging. The normal healthy case. |
+  | `explained`   | `0 < missing ≤ errored`      | Some rows are missing, but at least as many instances had errors recorded — each loss has a corresponding error on file. Expected shape for resources with validation failures. |
+  | `SILENT_LOSS` | `missing > errored`          | **More rows are missing than had errors.** The pipeline dropped rows without recording a per-row error. Investigate `etl-records-by-resource.txt`, `etl-errors-by-resource-instances.txt`, and the staging table. Fails `S2` → verdict `DEGRADED`. |
+  | `DUPLICATES`  | `missing < 0` (staging > records) | More rows in staging than the audit API saw. Almost always means staging wasn't truncated before the upload and carries over from a previous run. Fails `S3`. |
+  | `no_table`    | no table name matched        | No staging table was found for the resource. Add a `RESOURCE_TO_TABLE_OVERRIDE` entry or confirm the resource doesn't have a dedicated staging table. |
+
+  **`SILENT_LOSS` when a linkage abort is in play.** The Stage 1 global
+  linkage abort (`Unsaved resources: N`) is a single API entry at the
+  batch grain — it doesn't attach to the individual `recordId`s it
+  blocks. So at the per-resource grain a linkage-blocked row looks like
+  `records=1, errored=0, missing=1` and lands in `SILENT_LOSS`. This
+  means `S2` and `S6` can both fire for the **same** underlying
+  problem. To confirm that's what you're seeing, cross-reference the
+  resource's missing IDs against `blocked-record-ids.txt`; if every
+  missing ID is in the blocked list, the "silent" loss is fully
+  explained by the linkage abort and fixing the root-cause referential
+  errors (Section 5, Layer A) will clear `S2`, `S6`, and most
+  downstream failures in one go.
 - **"By `propertyInError`"** tells you how many errors actually pin
   down a field — most IDEA4RC errors do **not**, they're class-level
   failures. The report calls that out explicitly.
