@@ -194,6 +194,13 @@ from the IDEA4RC reference deployment.
 | `OMOP_DB_NAME` | `omopdb` | Database name on the OMOP Postgres |
 | `OMOP_SCHEMA` | `cdm_idea` | Schema that holds the OMOP CDM tables |
 | `RESOURCE_TO_TABLE_OVERRIDE` | _(empty)_ | Manual overrides for the per-resource reconciliation's resource→table mapping. Space-separated `Name:table_name` pairs. Only needed for tables whose name isn't the resource's CamelCase name converted to snake_case. |
+| `SUCCESS_CORE_RESOURCES` | `Patient Diagnosis` | Space-separated list of resources whose errored-rate is judged against the stricter `CORE` budget. |
+| `SUCCESS_CORE_OMOP_DOMAINS` | `person visit_occurrence condition_occurrence procedure_occurrence measurement observation` | OMOP CDM tables whose 100%-filter or zero-count drop downgrades the run. |
+| `SUCCESS_BUDGET_WNF_ROWS` | `50` | Max `Wrong number format` rows (log-derived) before criterion `B1` fails. |
+| `SUCCESS_BUDGET_ERRORED_RATE_CORE` | `0.01` | Max `errored / records` ratio for CORE resources (criterion `B3`). |
+| `SUCCESS_BUDGET_ERRORED_RATE_OTHER` | `0.05` | Max `errored / records` ratio for non-CORE resources (criterion `B4`). |
+| `SUCCESS_BUDGET_LINKAGE_RATE` | `0.01` | Max `Unsaved resources / api_records` ratio (criterion `B2`). |
+| `SUCCESS_BUDGET_OMOP_SKIP_RATE` | `0.0001` | Max `real_skip / total_read` ratio across OMOP steps (criterion `B5`). |
 
 ### Environment overrides
 
@@ -259,6 +266,18 @@ Flags supported by `audit-summarize.sh`:
 | `-h`, `--help` | Print the header comment block |
 | _(positional)_ | Override `$OUTDIR` for this run only |
 
+The summarizer returns an exit code that encodes the worst failing
+success-criterion tier, so it's directly usable in CI:
+
+| Exit code | Meaning |
+|:---:|---|
+| `0` | Every success criterion passes. |
+| `1` | One or more soft-invariant (`S*`) or budget (`B*`) criteria fail — follow-up required but the run is still usable. |
+| `2` | One or more hard-invariant (`I*`) criteria fail — the run is not trustworthy. |
+
+The report itself does not render a "Verdict" line; the criteria table
+and Follow-ups list are the outcome.
+
 ---
 
 ## When to run
@@ -320,7 +339,9 @@ each run to avoid mixing artifacts from different uploads.
 | `omop-skip-by-type.txt` | grep + sort \| uniq -c | `EXCEPTION SKIP` counts by exception type + step |
 | `omop-skip-ids.txt` | grep + sed | Distinct (step, source_id) pairs skipped |
 | `omop-counts.txt` | `psql` (OMOP DB) | Domain counts (person, visit_occurrence, …) |
-| `wrong-number-format-rows.tsv` | `audit-summarize.sh` | Extracted "Wrong number format" rows |
+| `wrong-number-format-rows.tsv` | `audit-summarize.sh` | Extracted "Wrong number format" rows (`record_id, row_id, property_in_error, bad_value, parent_id`) |
+| `blocked-record-ids.txt` | `audit-summarize.sh` | Record IDs blocked by the Stage 1 global `RESOURCE_LINKAGE_ERROR` (one ID per line, extracted from the log's `Blocked record_id list (all): [...]` line). Only produced when a linkage abort occurred. |
+| `csv-rows.txt` | `audit-pipeline-errors.sh` | CSV row count (excluding the header). Only written when `CSV_FILE` is configured; drives criterion `I10` (CSV ↔ Aerospike parity). |
 | `SUMMARY.md` | `audit-summarize.sh -m` | Markdown copy of the report |
 
 Artifacts are plain text. Tar them up to preserve a run:
@@ -345,6 +366,20 @@ The summary has seven sections. The bits worth internalizing:
   `ExcelRecord(...)` line that follows each `Wrong number format:`
   error and tabulates them into `wrong-number-format-rows.tsv`. Quick
   way to find the handful of cells that need fixing in the source CSV.
+- **"Global linkage abort (log-only)"** surfaces the `Unsaved
+  resources: N` signal. This is the single most important log-only
+  number, because the audit API represents the whole abort as one
+  `RESOURCE_LINKAGE_ERROR` entry whose `motivation` literally says
+  "See ETL logs for blocked resources" — without parsing the log the
+  scale of the abort is invisible. The full expansion is written to
+  `blocked-record-ids.txt` (one ID per line), plus the first 20
+  blocked `recordId / class / linkedTo / missingDependencies` tuples
+  are printed inline as a sample.
+- **"ERROR-line reconciliation"** is a safety net: it compares the
+  total `ERROR` line count from `etl-idea.log` against the sum of the
+  categories above (faults + wrong-number-format + linkage + HTTP).
+  Any remainder surfaces as "Unexplained ERROR lines" with a sample,
+  so a new log shape can't slip through silently.
 
 ### Stage 2 — staging
 
@@ -419,15 +454,61 @@ and D typically shrink once A is fixed.
 health. A mismatch means Stage 3 dropped people, and the "real skip"
 count should explain how many.
 
-### Section 7 — verdict
+### Section 7 — Success criteria & follow-ups
 
-Three possible outcomes:
+The final section renders a single criteria table plus a bullet list
+of any criteria that failed. The verdict is deterministic — there is
+no prose judgement — and only the exit code encodes the tier (see
+[Usage](#usage)).
 
-- **HEALTHY** — no real HTTP errors, no severe OMOP errors, handshake matches.
-- **OK with caveats** — warnings (drug-exposure = 0, many staging
-  errors, or non-retry skips) but no hard failure.
-- **DEGRADED** — hard failure; the follow-up list points you at the
-  artifact that explains it.
+**Code prefixes in the criteria table:**
+
+- **`I*`** — hard invariants (pipeline integrity). Any `✗` here means
+  the run is not trustworthy; exit code `2`. Examples:
+  - `I1` OMOP job status `== COMPLETED`
+  - `I2`/`I3` Aerospike ↔ Audit API record/error counts match
+  - `I4` staging_patients == omop_persons (the handshake)
+  - `I5` every OMOP step satisfies `read == write + filter + skip`
+  - `I6` every Stage 1 `ERROR` line is explained (no unknown shapes)
+  - `I7` every API `.error` code is in `{RECORD_CONVERSION_ERROR,
+    RESOURCE_LINKAGE_ERROR}`
+  - `I8` zero severe (non-skip) OMOP errors
+  - `I9` Aerospike `stop-writes-count` / `stop-writes-size` all `0`
+    (neither set refused writes)
+  - `I10` CSV rows == Aerospike `ExcelRecord` objects — only evaluated
+    when `CSV_FILE` is configured so the collector persists
+    `csv-rows.txt`; skipped otherwise
+- **`S*`** — soft invariants (data integrity). Any `✗` means the data
+  landed with issues but the pipeline ran; exit code `1`. Examples:
+  - `S1` pod health: every pod `Running`, `READY=N/N`, `0` restarts
+  - `S2` no `SILENT_LOSS` row in the per-resource reconciliation
+  - `S3` no `DUPLICATES` row
+  - `S4` no 100 %-filter step targeting a core OMOP domain (target is
+    parsed from the Spring Batch step name, e.g.
+    `systemicTreatmentToProcedureStep` → `procedure_occurrence`)
+  - `S5` zero non-retry OMOP skips
+  - `S6` no linkage abort (`Unsaved resources == 0`)
+  - `S7` no core OMOP domain with a count of `0` in `omop-counts.txt`
+    (catches the case where every step targeting a domain filters out
+    all rows)
+- **`B*`** — budgets (tunable tolerances). Any `✗` means something
+  exceeded the configured budget; exit code `1`. Thresholds live in
+  `audit.conf` under `SUCCESS_BUDGET_*` / `SUCCESS_CORE_*`
+  (see [Configuration](#every-key)):
+  - `B1` wrong-number-format rows (absolute)
+  - `B2` linkage-abort rate
+  - `B3` CORE resource errored-rate
+  - `B4` non-CORE resource errored-rate
+  - `B5` OMOP real-skip rate
+
+**Follow-ups** lists one bullet per failing criterion with the
+measured value and the rule. If every criterion passes, the section
+reads `No follow-ups — all criteria pass.`
+
+To tighten or loosen the bar for a given deployment, edit the
+`SUCCESS_*` keys in that deployment's `audit.conf`. Adding new
+criteria requires a matching entry in `audit-summarize.sh` — see
+[Adding a new check](#adding-a-new-check).
 
 ---
 
@@ -530,13 +611,25 @@ Postgres instances) is missing or replaced:
    artifact file into `$OUTDIR`.
 2. Add a new block to `audit-summarize.sh` that reads that file and
    emits a report section.
-3. (Optional) Add a new verdict rule in Section 7 of
-   `audit-summarize.sh`.
+3. Add a success criterion in `audit-summarize.sh`'s Section 7
+   (`crit <CODE> <TIER> <pass|fail|skip> <desc> <rule> <measured>`).
+   Rules of thumb:
+   - Prefer **invariants** (`I*` hard, `S*` soft) when the check is
+     binary.
+   - Prefer **budgets** (`B*`) when the check is a rate or count that
+     scales with input volume; expose the threshold as a new
+     `SUCCESS_BUDGET_*` key in `audit-config-lib.sh`,
+     `audit.conf.example`, and the README's
+     [Every key](#every-key) table (the three lists are drift-checked
+     in [Contributing](#contributing)).
+   - Always give the criterion a stable code and cite the exact
+     artifact file the measurement comes from.
 
 Follow the existing pattern of graceful degradation: every read
 should be guarded with `[[ -f "$DIR/new-artifact" ]]` so the
 summarizer still works on old artifact bundles that predate your
-check.
+check, and a criterion with a missing data source should `crit …
+skip` (n/a) rather than fail.
 
 ---
 

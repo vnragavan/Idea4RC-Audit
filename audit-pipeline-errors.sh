@@ -289,6 +289,8 @@ if [[ -n "$CSV_FILE" && -f "$CSV_FILE" ]]; then
   CSV_ROWS=$(($(wc -l < "$CSV_FILE") - 1))
   echo "csv_rows (excluding header): ${CSV_ROWS}"
   echo "${CSV_ROWS} / ${STAGING_PATIENTS} / (errors see above)"
+  # Persist for the summariser so it can assert disk→Aerospike parity.
+  printf "%s\n" "$CSV_ROWS" > "$OUTDIR/csv-rows.txt"
 fi
 
 # ---------- 3. OMOP ETL errors ----------

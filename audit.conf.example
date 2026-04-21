@@ -93,3 +93,31 @@ OMOP_DB_NAME="omopdb"
 
 # Schema that holds the OMOP CDM tables (person, visit_occurrence, ...).
 OMOP_SCHEMA="cdm_idea"
+
+# ---------- Success criteria ----------
+# The summarizer emits a "## Success criteria" table and a deterministic
+# Verdict (CLEAN / DEGRADED / FAILED) based on the checks below. Budgets
+# are tunable per deployment; the defaults are conservative and appropriate
+# for a mature production pipeline. Raise them early in a roll-out, then
+# tighten as data quality stabilises.
+#
+# Exit code: 0 = CLEAN, 1 = DEGRADED, 2 = FAILED — safe to use in CI.
+
+# Resources whose error rate is judged against the stricter `CORE` budget.
+# Space-separated list of CamelCase names as they appear in the audit API.
+# Everything else is judged against the `OTHER` budget.
+SUCCESS_CORE_RESOURCES="Patient Diagnosis"
+
+# OMOP CDM domains (table names) whose data loss is considered critical.
+# A 100%-filter step targeting one of these, or a zero count where staging
+# had rows, downgrades the verdict to DEGRADED.
+SUCCESS_CORE_OMOP_DOMAINS="person visit_occurrence condition_occurrence procedure_occurrence measurement observation"
+
+# Absolute caps (rare events — signal regressions rather than volume).
+SUCCESS_BUDGET_WNF_ROWS=50          # rows with Wrong number format (log-derived)
+
+# Rates (in [0, 1]; compared with three-decimal precision).
+SUCCESS_BUDGET_ERRORED_RATE_CORE=0.01     # errored / records, for CORE resources
+SUCCESS_BUDGET_ERRORED_RATE_OTHER=0.05    # errored / records, for non-CORE resources
+SUCCESS_BUDGET_LINKAGE_RATE=0.01          # Unsaved resources / api_records
+SUCCESS_BUDGET_OMOP_SKIP_RATE=0.0001      # real (non-retry) skips / total OMOP reads
