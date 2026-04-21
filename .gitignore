@@ -1,0 +1,27 @@
+# User-local configuration. Copy audit.conf.example -> audit.conf and
+# edit — but do not commit the result. It contains your namespace,
+# user names, cluster-specific paths, and is unique per deployment.
+/audit.conf
+
+# Collector output. These directories contain raw logs, error
+# samples, and record-level JSON from your pipeline — which very
+# likely includes PHI/PII/PII-adjacent data. Never commit them.
+/capsule-audit-latest/
+/*-audit-latest/
+/*-audit-*/
+*-capsule-audit-*/
+
+# Generated summary (written alongside artifacts by -m / -o)
+SUMMARY.md
+
+# Editor / OS junk
+*~
+*.swp
+*.swo
+*.bak
+*.orig
+.DS_Store
+Thumbs.db
+
+# Shell history if someone cd's here
+.bash_history

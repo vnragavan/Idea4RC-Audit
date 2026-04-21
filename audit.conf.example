@@ -1,0 +1,95 @@
+# audit.conf — configuration for the Capsule audit scripts.
+#
+# This file is sourced as bash. Copy it to e.g. `audit.conf` and edit
+# values for your target machine. Pass the path to the audit scripts with:
+#
+#   audit-pipeline-errors.sh -c /path/to/audit.conf
+#   audit-summarize.sh       -c /path/to/audit.conf
+#
+# Alternatively, set CAPSULE_AUDIT_CONFIG=/path/to/audit.conf in the
+# environment, or place `audit.conf` next to the scripts — it will be
+# auto-detected.
+#
+# Values below are EXAMPLES from the reference IDEA4RC install. Change
+# any that don't match your deployment; any value left commented out
+# falls back to the default shown.
+
+# ---------- Kubernetes access ----------
+# Namespace where the Capsule pipeline runs.
+NS=datamesh
+
+# kubectl binary. On microk8s this is usually `microk8s.kubectl`.
+# On a standard kubeconfig setup, set to `kubectl`.
+KUBECTL=microk8s.kubectl
+
+# ---------- Output ----------
+# Where artifacts + logs are written by audit-pipeline-errors.sh
+# and read by audit-summarize.sh. Relative paths are resolved from
+# the current working directory at the time you run the script.
+#
+# WARNING: this directory WILL contain raw error messages and sample
+# rows from your pipeline — that almost certainly includes PHI/PII.
+# Keep it out of version control (see the shipped `.gitignore`).
+OUTDIR=./capsule-audit-latest
+
+# Optional: path to the CSV that was uploaded, for reconciliation.
+# Leave empty to skip.
+CSV_FILE=
+
+# ---------- Pod discovery ----------
+# Label selectors (preferred) for the pipeline components.
+ETL_APP_SELECTOR="app=etl-idea"
+ETL_DB_SELECTOR="app=etl"
+OMOP_ETL_SELECTOR="app=omop-etl"
+
+# Substring patterns used when the pod has no stable label.
+# These match against `kubectl get pods` pod names.
+OMOP_DB_POD_PATTERN="omop-cdm"
+AERO_POD_PATTERN="aerospike"
+
+# ---------- etl-idea audit API ----------
+# Service the script will port-forward to in order to reach the audit API.
+ETL_SERVICE="svc/etl-svc"
+
+# Local + remote port used for the port-forward (same number on both sides).
+ETL_PORT=4001
+
+# Audit API endpoints exposed by etl-idea.
+AUDIT_ERRORS_PATH="/audit/etl-errors"
+AUDIT_RECORDS_PATH="/audit/records"
+
+# ---------- Aerospike ----------
+# Aerospike namespace and sets queried via `asinfo -v "sets/<ns>/<set>"`.
+# AERO_NAMESPACE below is the IDEA4RC reference value — change it to
+# whatever namespace your Capsule install uses.
+AERO_NAMESPACE="idea4rc"
+AERO_SET_RECORDS="ExcelRecord"
+AERO_SET_ERRORS="EtlProcessError"
+
+# ---------- Staging Postgres (etl-db) ----------
+# Used for `psql -U $ETL_DB_USER -d $ETL_DB_NAME`.
+ETL_DB_USER="etl"
+ETL_DB_NAME="etl"
+
+# Fully-qualified patient table used for the handshake count.
+ETL_DB_PATIENT_TABLE="public.patient"
+
+# Optional: manual overrides for the resource-name -> staging-table
+# mapping used by the per-resource reconciliation in audit-summarize.sh.
+#
+# By default the summarizer converts the audit API's `resourceName`
+# (e.g. `SystemicTreatment`) to snake_case (`systemic_treatment`) and
+# looks that up in `staging-counts.txt`. Use this setting only when the
+# staging table name doesn't follow that convention.
+#
+# Format: space-separated "ResourceName:table_name" pairs.
+# Example: "SystemicTreatment:sys_treatment  Comorbidity:co_morbidity"
+RESOURCE_TO_TABLE_OVERRIDE=""
+
+# ---------- OMOP Postgres (omop-cdm) ----------
+# IDEA4RC reference values — rename to match your OMOP deployment.
+OMOP_DB_USER="cdm_idea"
+OMOP_DB_NAME="omopdb"
+
+# Schema that holds the OMOP CDM tables (person, visit_occurrence, ...).
+OMOP_SCHEMA="cdm_idea"
