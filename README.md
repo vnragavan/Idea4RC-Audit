@@ -390,7 +390,7 @@ The summary has seven sections. The bits worth internalizing:
   - **100% filtered** (read > 0, write = 0) — mapping gap; a domain
     the pipeline knows about but has no rules for.
   - **partial filter** (write > 0 **and** filter > 0) — some rows
-    mapped, some intentionally dropped. Usually fine.
+    mapped, some intentionally dropped. 
   - **skip > 0** — the processor threw on specific rows. Look at
     `omop-skip-by-type.txt`.
   - **0 reads** — that CSV section wasn't in the upload at all.
